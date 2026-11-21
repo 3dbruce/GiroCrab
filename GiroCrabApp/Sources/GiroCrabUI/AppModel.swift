@@ -707,6 +707,10 @@ public final class AppModel {
     var activeChallenge: ActiveChallenge?
     var payeeCheck: PendingPayeeCheck?
     var syncingConnectionID: Int64?
+    /// The one account the running sync of `syncingConnectionID` covers
+    /// ("<Konto> abrufen", statements), nil for the whole login. Set with it by
+    /// `startSync`; read only through `isSyncing(_:)` (#1572).
+    var syncingAccountID: Int64?
     var toast: String?
     /// Text of the error alert. Clearing it also clears title and retry.
     var errorMessage: String? {

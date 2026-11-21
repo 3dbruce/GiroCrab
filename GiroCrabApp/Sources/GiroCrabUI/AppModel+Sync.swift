@@ -80,11 +80,21 @@ extension AppModel {
     func requestSyncAccount(_ account: Account) {
         guard syncingConnectionID == nil, !account.isArchived, let cid = account.connectionId,
               let connection = connections.first(where: { $0.id == cid }) else { return }
-        // logins with their own flow (web portal, file import, Advanzia) fetch everything
-        if !usesPortal(connection), !usesFileImport(connection), connection.connector != .advanzia {
-            syncAccountID = account.id
-        }
+        if supportsAccountSync(connection) { syncAccountID = account.id }
         requestSync(connection)
+    }
+
+    /// Logins with their own flow (web portal, file import, Advanzia) fetch
+    /// everything, also for "<Konto> abrufen".
+    func supportsAccountSync(_ connection: BankConnection) -> Bool {
+        !usesPortal(connection) && !usesFileImport(connection) && connection.connector != .advanzia
+    }
+
+    /// Whether the sidebar shows `account` as being fetched: its login syncs,
+    /// and the sync is not limited to another of its accounts (#1572).
+    func isSyncing(_ account: Account) -> Bool {
+        guard let cid = syncingConnectionID, cid == account.connectionId else { return false }
+        return syncingAccountID == nil || syncingAccountID == account.id
     }
 
     func requestSyncAll() {
@@ -385,6 +395,7 @@ extension AppModel {
         let accountOnly = ownAccount(syncAccountID, of: connection)
         let quiet = quietSyncConnectionID == connection.id
         syncingConnectionID = connection.id
+        syncingAccountID = statementsFor ?? accountOnly
         syncGeneration &+= 1
         Task {
             var started: SyncSession?
