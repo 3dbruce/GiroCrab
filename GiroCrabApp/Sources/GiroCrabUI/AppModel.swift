@@ -970,6 +970,7 @@ public final class AppModel {
             case "sparplaene", "sparpläne", "investments": scope = .investments
             case "belege", "documents": sidebarSelection = .documents
             case "geplant", "planned": sidebarSelection = .planned
+            case "neu", "new": sidebarSelection = .newBookings
             case "lastschriften", "debits": sidebarSelection = .directDebits
             case "vermoegen", "vermögen", "wealth": sidebarSelection = .wealth
             case "vermoegen-cash": sidebarSelection = .wealth; wealthScope = .cash
