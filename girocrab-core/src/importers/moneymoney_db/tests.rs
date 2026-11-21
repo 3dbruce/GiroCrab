@@ -4294,3 +4294,28 @@ fn archiving_an_archived_account_keeps_its_time_and_stamp() {
     assert_eq!(pair().0, None);
     assert!(pair().1 >= first.1);
 }
+
+/// #1002: a fixed-term deposit is told from a savings account by its name.
+#[test]
+fn suggests_time_deposit_for_festgeld_names() {
+    let bank_named = |name: &str| SrcBank {
+        name: name.into(),
+        ..SrcBank::default()
+    };
+    let kind = |name: &str| {
+        let mut a = src_acc(1, "123", "50050201", "", "EUR");
+        a.name = name.into();
+        suggest_kind(&a, Some(&bank_named("Testbank")))
+    };
+    assert_eq!(kind("Festgeld 12 Monate"), AccountKind::TimeDeposit);
+    assert_eq!(kind("Termingeldkonto"), AccountKind::TimeDeposit);
+    assert_eq!(kind("Tagesgeld"), AccountKind::Savings);
+    // the bank name must not turn a Festgeld into a card
+    let mut a = src_acc(1, "123", "50050201", "", "EUR");
+    a.name = "Festgeld 12 Monate".into();
+    assert_eq!(
+        suggest_kind(&a, Some(&bank_named("American Express"))),
+        AccountKind::TimeDeposit
+    );
+    assert_eq!(kind("Girokonto"), AccountKind::Checking);
+}

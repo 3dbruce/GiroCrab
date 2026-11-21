@@ -767,6 +767,9 @@ fn suggest_kind(a: &SrcAccount, bank: Option<&SrcBank>) -> AccountKind {
     let both = format!("{name} {}", bank_name.to_lowercase());
     if a.portfolio {
         AccountKind::Brokerage
+    } else if has_any(&name, &["festgeld", "termingeld", "time deposit"]) {
+        // before the card words, which are also searched in the bank name (#1002)
+        AccountKind::TimeDeposit
     } else if bank.is_some_and(SrcBank::card_only)
         || has_any(
             &both,
@@ -790,7 +793,6 @@ fn suggest_kind(a: &SrcAccount, bank: Option<&SrcBank>) -> AccountKind {
             "tagesgeld",
             "sparkonto",
             "sparbuch",
-            "festgeld",
             "geldmarkt",
             "savings",
             "extra-konto",
