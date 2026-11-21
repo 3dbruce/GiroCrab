@@ -8073,13 +8073,13 @@
         }
       }
     },
-    "Bitte gleichen Sie Betrag und die letzten 4 Ziffern der Empfänger-IBAN vor der Freigabe auf Ihrem TAN-Gerät / Smartphone ab." : {
+    "Bitte gleichen Sie Betrag und die letzten 4 Zeichen der Empfänger-IBAN vor der Freigabe auf Ihrem TAN-Gerät / Smartphone ab." : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Before approving, please compare the amount and the last 4 digits of the recipient IBAN on your TAN device / smartphone."
+            "value" : "Before approving, please compare the amount and the last 4 characters of the recipient IBAN on your TAN device / smartphone."
           }
         }
       }

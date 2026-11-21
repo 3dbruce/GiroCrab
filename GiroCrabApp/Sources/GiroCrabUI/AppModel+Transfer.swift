@@ -8,13 +8,23 @@ extension AppModel {
     /// Checking accounts that are connected via FinTS (HKCCS-capable banks).
     var transferAccounts: [Account] { sendableAccounts(of: .checking) }
 
-    /// Amount and IBAN end to compare on the TAN device (#949): only while a single transfer waits for its
-    /// approval (not for batches, standing orders, direct debits or the login TAN of a sync).
+    /// What the TAN sheet asks the user to compare (#949): only for the TAN of a single transfer that
+    /// was sent, never for its login SCA or a sync's challenge, and always the values sent to the bank.
     var tanComparison: TanComparison? {
-        guard activeTransfer != nil, activeChallenge != nil,
-              !activeTransferIsBatch, !activeTransferIsStanding, !activeTransferIsDebit,
-              let cents = try? parseAmountToCents(text: transferDraft.amountText), cents > 0 else { return nil }
-        return TanComparison(iban: transferDraft.iban, amountCents: cents)
+        Self.visibleTanComparison(
+            snapshot: activeTransferComparison,
+            orderApproval: activeChallenge?.orderApproval == true,
+            isBatch: activeTransferIsBatch,
+            isStanding: activeTransferIsStanding,
+            isDebit: activeTransferIsDebit
+        )
+    }
+
+    static func visibleTanComparison(
+        snapshot: TanComparison?, orderApproval: Bool, isBatch: Bool, isStanding: Bool, isDebit: Bool
+    ) -> TanComparison? {
+        guard orderApproval, !isBatch, !isStanding, !isDebit else { return nil }
+        return snapshot
     }
 
     /// Savings accounts (Tagesgeld) the bank lets us book from, but only as an
@@ -117,6 +127,9 @@ extension AppModel {
     /// show an own account while the order goes to this IBAN. A savings account
     /// may only book to own accounts: from there only amount and purpose are taken.
     func fillTransferDraft(_ p: ParsedPayment, onlyEmpty: Bool = false) {
+        // a running order keeps its form: the TAN card shows the sent values anyway, and a late
+        // invoice import must not change what the user sees while approving (#949)
+        guard activeTransfer == nil else { return }
         let savings = allAccounts.first { $0.id == transferDraft.accountID }?.kind == .savings
         if savings {
             if let amount = p.amountText, !onlyEmpty || transferDraft.amountText.isEmpty {
@@ -188,6 +201,7 @@ extension AppModel {
             transferBusy = true
             showTransferSheet = false
             activeTransfer = session
+            activeTransferComparison = TanComparison(iban: request.recipientIban, amountCents: cents)
             Task {
                 do {
                     self.handleTransfer(try await session.start(), connection: connection)
@@ -209,6 +223,7 @@ extension AppModel {
             payeeCheck = PendingPayeeCheck(connection: connection, check: check)
         case .needsChallenge(let c):
             activeChallenge = ActiveChallenge(connection: connection, challenge: c, waiting: false)
+            activeChallenge?.orderApproval = activeTransfer?.awaitsOrderApproval() == true
             if c.kind == .decoupledPush || c.kind == .progress { schedulePoll(connection: connection, interval: c.pollIntervalSeconds) }
         case .stillWaiting(let c):
             if activeChallenge == nil {
@@ -217,6 +232,7 @@ extension AppModel {
                 activeChallenge?.waiting = true
                 activeChallenge?.busy = false
             }
+            activeChallenge?.orderApproval = activeTransfer?.awaitsOrderApproval() == true
             schedulePoll(connection: connection, interval: c.pollIntervalSeconds)
         case .finished(let outcome):
             // Executed but not stored: still finish as sent (no resend), then warn.

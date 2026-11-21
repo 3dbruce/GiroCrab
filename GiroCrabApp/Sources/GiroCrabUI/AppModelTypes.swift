@@ -453,6 +453,9 @@ struct ActiveChallenge: Identifiable {
     var waiting: Bool
     var busy: Bool = false
     var error: String?
+    /// The TAN of a transfer order that was sent (not its login SCA, not a sync's challenge):
+    /// only then does the sheet show the order comparison (#949).
+    var orderApproval = false
 }
 
 /// Missing FinTS product ID / API keys for a bank: shown as a setup form.

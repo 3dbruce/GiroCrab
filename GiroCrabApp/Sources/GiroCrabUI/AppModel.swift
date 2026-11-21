@@ -719,7 +719,13 @@ public final class AppModel {
     }
 
     var activeSession: SyncSession?
-    var activeTransfer: TransferSession?
+    var activeTransfer: TransferSession? {
+        // the frozen order data belongs to one session: a new one, the end, a cancel or the lock clears it
+        didSet { if activeTransfer !== oldValue { activeTransferComparison = nil } }
+    }
+    /// Recipient IBAN and amount of the single transfer as handed to the bank (#949), frozen when it
+    /// starts: the TAN card never follows later edits of `transferDraft`. Nil for batch, standing order, debit.
+    var activeTransferComparison: TanComparison?
     var showTransferSheet = false
     /// Batch transfer (#240): sheet, the rows being edited, and whether the running session is one.
     var showBatchSheet = false

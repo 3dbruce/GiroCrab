@@ -20,6 +20,24 @@ struct TwoFactorSheet: View {
 
     var body: some View {
         if let active = model.activeChallenge {
+            #if os(iOS)
+            if showsConsentPage {
+                // the bank's page sizes itself; inside a scroll view it would collapse
+                challengeContent(active)
+            } else {
+                // small iPhones: with the keyboard up, the comparison card (#949) pushes the
+                // TAN field and the buttons below the fold; scrolling keeps them reachable
+                ScrollView { challengeContent(active) }
+                    .scrollDismissesKeyboard(.interactively)
+            }
+            #else
+            challengeContent(active)
+            #endif
+        }
+    }
+
+    @ViewBuilder
+    private func challengeContent(_ active: ActiveChallenge) -> some View {
             let c = active.challenge
             VStack(spacing: 18) {
                 HStack(spacing: 10) {
@@ -203,7 +221,6 @@ struct TwoFactorSheet: View {
             .fixedSize(horizontal: false, vertical: !showsConsentPage)
             // the bank's own page needs the room of a browser window
             .macFrame(minWidth: showsConsentPage ? 868 : 400, idealWidth: showsConsentPage ? 928 : 420)
-        }
     }
 
     /// Sends the code / pasted address – once: Return reaches both the field
