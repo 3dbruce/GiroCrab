@@ -26,9 +26,10 @@ Abgleich berücksichtigt neue Dokumente, Dokumente mit erstmals erkanntem
 Ablagekonto und neu abgerufene Buchungen. Die Datumsangaben im PDF bestimmen,
 welche Buchungen in Betracht kommen, auch wenn das Erstellungsdatum fehlt
 oder deutlich abweicht. Bereits gespeicherte Buchungen zählen bei der Auswahl
-weiterhin mit. Eine manuell gelöste Verknüpfung bleibt beim Wiederholungsabruf
-offen, wenn das Ablagekonto unverändert bleibt. Der Abgleich erhält das
-Ablagekonto und bestehende Verknüpfungen.
+weiterhin mit. Ein erneuter Abruf derselben Daten stellt eine manuell gelöste
+Verknüpfung bei unverändertem Ablagekonto nicht wieder her. Eine neue, besser
+passende Buchung kann weiterhin mit dem Beleg verknüpft werden. Der Abgleich
+erhält das Ablagekonto und bestehende Verknüpfungen.
 
 Für eine Verknüpfung müssen der Betrag, der Gegenstand und ein Datum im PDF zur
 Buchung passen. Der Abgleich berücksichtigt nur gebuchte Umsätze. Bei mehreren

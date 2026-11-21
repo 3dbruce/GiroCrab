@@ -654,8 +654,7 @@ fn a_comdirect_receipt_uses_the_settlement_currency_when_the_price_has_the_same_
         "abrechnung",
         crate::documents::simple_pdf(&[
             format!("Wertpapierkauf {CD_ISIN}"),
-            "Kurswert 100,00 USD".into(),
-            "Ausmachender Betrag 100,00 EUR".into(),
+            "Ausmachender Betrag 100,00 EUR Kurswert 100,00 USD".into(),
             "Geschaeftstag 04.12.2025".into(),
         ]),
         "2025-12-04",
@@ -682,6 +681,48 @@ fn a_comdirect_receipt_uses_the_settlement_currency_when_the_price_has_the_same_
         v.list_all_documents(Default::default()).unwrap()[0].booking_id,
         Some(booking_id_of(&v, "eur"))
     );
+}
+
+#[test]
+fn comdirect_does_not_use_the_sole_account_when_a_different_account_is_named() {
+    for account_line in [
+        "Verrechnungskonto Nr. 765432100",
+        "Verrechnungskonto IBAN DE75 2004 1155 0765 4321 00",
+    ] {
+        let (_dir, v) = open_vault("girocrab-cd-unknown-account");
+        let (kind, conn) = cd_connection(&v, false, "login");
+        let receipt = cd_document(
+            "receipt",
+            CD_DEPOT,
+            cd_purchase_title(),
+            "abrechnung",
+            crate::documents::simple_pdf(&[
+                format!("Wertpapierkauf {CD_ISIN}"),
+                account_line.into(),
+                "Ausmachender Betrag 100,00 EUR".into(),
+                "Geschaeftstag 04.12.2025".into(),
+            ]),
+            "2025-12-04",
+        );
+        let booking = cd_booking(
+            CD_GIRO,
+            "other",
+            "2025-12-04",
+            -100_00,
+            "EUR",
+            "Wertpapierkauf",
+        );
+        store_fetch(
+            &v,
+            kind,
+            conn,
+            cd_fetch(false, vec![booking], vec![receipt]),
+        )
+        .unwrap();
+        let docs = v.list_all_documents(Default::default()).unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].booking_id, None, "{account_line}");
+    }
 }
 
 #[test]
@@ -916,15 +957,17 @@ fn comdirect_content_matching_leaves_duplicate_pdfs_and_nearby_bookings_alone() 
         ),
     )
     .unwrap();
-    let count_links = || {
-        v.list_all_documents(Default::default())
-            .unwrap()
-            .iter()
-            .filter(|d| d.booking_id.is_some())
-            .count()
+    let stored_docs = || v.list_all_documents(Default::default()).unwrap();
+    let count_links = |docs: &[crate::documents::DocumentInfo]| {
+        docs.iter().filter(|d| d.booking_id.is_some()).count()
     };
+    let docs = stored_docs();
+    assert_eq!(docs.len(), 2);
+    for source in ["comdirect:postbox:first", "comdirect:postbox:duplicate"] {
+        assert!(docs.iter().any(|doc| doc.source_url == source));
+    }
     assert_eq!(
-        count_links(),
+        count_links(&docs),
         1,
         "the first link blocks a second one in the same pass"
     );
@@ -940,8 +983,17 @@ fn comdirect_content_matching_leaves_duplicate_pdfs_and_nearby_bookings_alone() 
         ),
     )
     .unwrap();
+    let docs = stored_docs();
+    assert_eq!(docs.len(), 3);
     assert_eq!(
-        count_links(),
+        docs.iter()
+            .find(|doc| doc.source_url == "comdirect:postbox:duplicate-later")
+            .unwrap()
+            .booking_id,
+        None
+    );
+    assert_eq!(
+        count_links(&docs),
         1,
         "an occupied best match blocks the fallback"
     );

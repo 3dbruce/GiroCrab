@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::documents::{amounts_in, dates_in, extract_pdf_text};
+use crate::documents::{amount_occurrences, amounts_in, dates_in, extract_pdf_text};
 use crate::error::CoreResult;
 use crate::models::ConnectorKind;
 
@@ -293,10 +293,10 @@ fn settled_amounts(text: &str, label_groups: &[&[&str]]) -> Vec<(i64, String)> {
         while let Some(at) = lower[from..].find(label).map(|i| i + from) {
             let first_amount = |line: &str| {
                 let line = DATE.replace_all(line, " ");
-                let amount = amounts_in(&line).first().copied()?;
-                let currencies = amounts_with_currency(&line)
+                let (position, amount) = amount_occurrences(&line).next()?;
+                let currencies = currency_occurrences(&line)
                     .into_iter()
-                    .filter(|(cents, _)| *cents == amount)
+                    .filter_map(|(start, _, currency)| (start == position).then_some(currency))
                     .collect::<Vec<_>>();
                 Some((amount, currencies))
             };
@@ -307,7 +307,7 @@ fn settled_amounts(text: &str, label_groups: &[&[&str]]) -> Vec<(i64, String)> {
             if let Some((cents, currencies)) = found {
                 let currency = match currencies.as_slice() {
                     [] => String::new(),
-                    [(_, currency)] => currency.clone(),
+                    [currency] => currency.clone(),
                     _ => continue,
                 };
                 out.push((cents, currency));
@@ -332,8 +332,9 @@ fn unambiguous_amounts(text: &str) -> Vec<i64> {
 }
 
 /// The settlement accounts (id, IBAN, account number) whose IBAN or number the text names. An IBAN
-/// is the stronger hint: where one is named, numbers are not looked at.
-fn accounts_named_in(text: &str, accounts: &[(i64, String, String)]) -> Vec<i64> {
+/// is the stronger hint. An explicit reference with no match returns an empty list;
+/// a receipt with no reference returns `None`.
+fn accounts_named_in(text: &str, accounts: &[(i64, String, String)]) -> Option<Vec<i64>> {
     let compact: String = text
         .chars()
         .filter(|c| !c.is_whitespace())
@@ -348,24 +349,43 @@ fn accounts_named_in(text: &str, accounts: &[(i64, String, String)]) -> Vec<i64>
         .map(|(id, _, _)| *id)
         .collect();
     if !by_iban.is_empty() {
-        return by_iban;
+        return Some(by_iban);
     }
+    const ACCOUNT_LABEL: &str =
+        r"(?:verrechnungskonto|abrechnungskonto|girokonto|verrechnung\s+(?:über|ueber)\s+konto)";
     static ACCOUNT_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)\b(?:verrechnungskonto|abrechnungskonto|girokonto|verrechnung\s+(?:über|ueber)\s+konto)(?:[ 	]+(?:nr\.?|nummer))?[ 	]*[:=]?\s*(\d{6,})\b").unwrap()
+        Regex::new(&format!(
+            r"(?i)\b{ACCOUNT_LABEL}(?:[ \t]+(?:nr\.?|nummer))?[ \t]*[:=]?\s*(\d{{6,}})\b"
+        ))
+        .unwrap()
     });
+    static LABELLED_IBAN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"(?i)\b{ACCOUNT_LABEL}(?:[ \t]+\(?IBAN\)?)?[ \t]*[:=]?\s*DE(?:[ \t]*[0-9]){{20}}\b"
+        ))
+        .unwrap()
+    });
+    if LABELLED_IBAN.is_match(text) {
+        return Some(Vec::new());
+    }
     let numbers: Vec<&str> = ACCOUNT_NUMBER
         .captures_iter(text)
         .map(|label| label.get(1).unwrap().as_str().trim_start_matches('0'))
         .collect();
-    accounts
-        .iter()
-        .filter(|(_, _, number)| {
-            let digits: String = number.chars().filter(char::is_ascii_digit).collect();
-            let digits = digits.trim_start_matches('0');
-            digits.len() >= 6 && numbers.contains(&digits)
-        })
-        .map(|(id, _, _)| *id)
-        .collect()
+    if numbers.is_empty() {
+        return None;
+    }
+    Some(
+        accounts
+            .iter()
+            .filter(|(_, _, number)| {
+                let digits: String = number.chars().filter(char::is_ascii_digit).collect();
+                let digits = digits.trim_start_matches('0');
+                digits.len() >= 6 && numbers.contains(&digits)
+            })
+            .map(|(id, _, _)| *id)
+            .collect(),
+    )
 }
 
 const CURRENCIES: &str = "EUR|USD|GBP|CHF|JPY|CAD|AUD|SEK|NOK|DKK|PLN|CZK|HUF|\u{20ac}|\\$";
@@ -373,6 +393,13 @@ const CURRENCIES: &str = "EUR|USD|GBP|CHF|JPY|CAD|AUD|SEK|NOK|DKK|PLN|CZK|HUF|\u
 /// The amounts of a text together with the currency written next to them ("25,00 EUR", "EUR 25,00",
 /// "25,00- EUR", "25,00 €"): (cents, ISO code). An amount without a currency beside it is not listed.
 fn amounts_with_currency(text: &str) -> Vec<(i64, String)> {
+    currency_occurrences(text)
+        .into_iter()
+        .map(|(_, cents, currency)| (cents, currency))
+        .collect()
+}
+
+fn currency_occurrences(text: &str) -> Vec<(usize, i64, String)> {
     const AMOUNT: &str = r"\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2}|\d+\.\d{2}";
     static AFTER: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(&format!(
@@ -387,18 +414,18 @@ fn amounts_with_currency(text: &str) -> Vec<(i64, String)> {
         "$" => "USD".to_string(),
         other => other.to_string(),
     };
-    let mut out: Vec<(i64, String)> = Vec::new();
-    let mut add = |amount: &str, currency: &str, end: usize| {
+    let mut out = Vec::new();
+    let mut add = |amount: regex::Match<'_>, currency: &str| {
         // a following digit means a longer number ("0,1361 USD" is no 0,13)
-        if text[end..]
+        if text[amount.end()..]
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_digit())
         {
             return;
         }
-        if let Ok(cents) = crate::money::parse_cents(amount) {
-            let pair = (cents.abs(), code(currency));
+        if let Ok(cents) = crate::money::parse_cents(amount.as_str()) {
+            let pair = (amount.start(), cents.abs(), code(currency));
             if cents != 0 && !out.contains(&pair) {
                 out.push(pair);
             }
@@ -408,11 +435,11 @@ fn amounts_with_currency(text: &str) -> Vec<(i64, String)> {
     for c in AFTER.captures_iter(text) {
         // A currency already used as a suffix cannot be the prefix of the next amount.
         suffix_positions.push(c.get(2).unwrap().start());
-        add(&c[1], &c[2], c.get(1).unwrap().end());
+        add(c.get(1).unwrap(), &c[2]);
     }
     for c in BEFORE.captures_iter(text) {
         if !suffix_positions.contains(&c.get(1).unwrap().start()) {
-            add(&c[2], &c[1], c.get(2).unwrap().end());
+            add(c.get(2).unwrap(), &c[1]);
         }
     }
     out
@@ -560,9 +587,9 @@ pub(crate) fn link_unlinked_by_content(
             continue;
         }
         let named = if rules.account_from_text {
-            match accounts_named_in(&text, &settlement).as_slice() {
-                [account] if active.contains(account) => Some(*account),
-                [] if settlement.len() <= 1 => None,
+            match accounts_named_in(&text, &settlement).as_deref() {
+                Some([account]) if active.contains(account) => Some(*account),
+                None if settlement.len() <= 1 => None,
                 _ => continue,
             }
         } else {
@@ -840,7 +867,7 @@ mod tests {
         ];
         assert_eq!(
             accounts_named_in("Verrechnungskonto DE75 2004 1155 0765 4321 00", &accounts),
-            [2]
+            Some(vec![2])
         );
         // the IBAN wins over a number that belongs to another account
         assert_eq!(
@@ -848,16 +875,20 @@ mod tests {
                 "IBAN DE75 2004 1155 0765 4321 00 Depot 123456700",
                 &accounts
             ),
-            [2]
+            Some(vec![2])
         );
-        assert!(accounts_named_in("Depotnummer 123456700", &accounts).is_empty());
+        assert!(accounts_named_in("Depotnummer 123456700", &accounts).is_none());
         assert_eq!(
             accounts_named_in("Verrechnungskonto Nr. 123456700", &accounts),
-            [1]
+            Some(vec![1])
         );
-        assert!(accounts_named_in("nichts", &accounts).is_empty());
+        assert!(accounts_named_in("nichts", &accounts).is_none());
+        assert_eq!(
+            accounts_named_in("Verrechnungskonto Nr. 999999999", &accounts),
+            Some(vec![])
+        );
         // part of a longer number is no hit
-        assert!(accounts_named_in("Vorgang 91234567001", &accounts).is_empty());
+        assert!(accounts_named_in("Vorgang 91234567001", &accounts).is_none());
     }
 
     #[test]
