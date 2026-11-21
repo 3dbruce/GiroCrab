@@ -250,6 +250,44 @@ extension AppModel {
         try? vault?.getDocumentBytes(docId: doc.id)
     }
 
+    /// The documents of bookings dragged into another app (`BookingDragItem`), read off the main
+    /// thread when that app asks for them. Booking ids are per vault: `pin` is the vault the
+    /// drag started in, and nothing is read unless it is still the open one (before and after
+    /// reading). Stops before `BookingDragExport.documentByteLimit`; a document that cannot be
+    /// read is left out, the others still come along.
+    func dragDocuments(for bookingIDs: [Int64], from pin: VaultPin?) async -> [Int64: [BookingDragExport.Document]] {
+        guard !bookingIDs.isEmpty, let pin, isCurrent(pin) else { return [:] }
+        let limit = BookingDragExport.documentByteLimit
+        let read = try? await pin.run { vault -> [Int64: [BookingDragExport.Document]] in
+            var out: [Int64: [BookingDragExport.Document]] = [:]
+            var total = 0
+            for id in bookingIDs {
+                for doc in (try? vault.listDocumentsForBooking(bookingId: id)) ?? [] {
+                    guard total + Int(doc.sizeBytes) <= limit else { return out }
+                    guard let bytes = try? vault.getDocumentBytes(docId: doc.id) else { continue }
+                    total += bytes.count
+                    out[id, default: []].append(BookingDragExport.Document(
+                        fileName: doc.fileName, mimeType: doc.mimeType,
+                        title: doc.title.isEmpty ? nil : doc.title, data: bytes))
+                }
+            }
+            return out
+        }
+        guard isCurrent(pin) else { return [:] }
+        return read ?? [:]
+    }
+
+    #if os(macOS)
+    /// What a booking row drags: the row, or the multiple selection it belongs to, with the
+    /// documents of those that have any, from the vault open now (`dragDocuments`).
+    func dragItem(for booking: Booking) -> BookingDragItem {
+        let pin = pinVault()
+        return BookingDragItem(bookings: categorizeTargets(for: booking), accounts: accountsByID) { [weak self] ids in
+            await self?.dragDocuments(for: ids, from: pin) ?? [:]
+        }
+    }
+    #endif
+
     /// Marks documents read or unread (opened in the list, or by hand).
     func markDocumentsSeen(_ ids: [Int64], seen: Bool) {
         guard let vault, !ids.isEmpty else { return }
