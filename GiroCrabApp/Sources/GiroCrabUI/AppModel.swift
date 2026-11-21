@@ -1495,13 +1495,15 @@ public final class AppModel {
                 let cloud = CloudSyncManager.shared
                 await cloud.sync(vault: v, remoteKey: pasted, mergeOnly: true)
                 if let e = cloud.lastError { self.keyAdoption = .failed(e); self.toast = e; return }
+                // Also with the device's own key (#1503): nothing found and nothing here
+                // means the other device syncs elsewhere, not „done“.
+                let hasData = ((try? v.accountCount()) ?? 0) > 0 || connectionsExist(v)
+                if !cloud.lastMergeFoundSnapshot && !hasData {
+                    // Name the place and offer another folder (#1503): the sheet stays open.
+                    self.keyAdoption = .notFound(KeyAdoptionState.notFoundMessage(location: cloud.location), searched: cloud.folderName)
+                    return
+                }
                 if pasted != current {
-                    let hasData = ((try? v.accountCount()) ?? 0) > 0 || connectionsExist(v)
-                    if !cloud.lastMergeFoundSnapshot && !hasData {
-                        let msg = String(localized: "Noch kein iCloud-Tresor gefunden. Aktivieren Sie iCloud Sync auf dem anderen Gerät, warten Sie auf den ersten Upload und versuchen Sie es erneut.")
-                        self.keyAdoption = .failed(msg); self.toast = msg
-                        return
-                    }
                     try v.rekey(newKey: pasted)
                     do {
                         // On failure importKey writes `current` back into the keychain.
@@ -1519,6 +1521,26 @@ public final class AppModel {
             } catch {
                 self.keyAdoption = .failed(describe(error)); self.toast = describe(error)
             }
+        }
+    }
+
+    /// „Ordner wählen …“ in the paste sheet after no vault was found (#1503):
+    /// syncs via the picked folder from now on and adopts the pasted key there.
+    /// A folder without a vault is refused, so adopting never starts a new vault.
+    func adoptSyncKey(_ text: String, folder url: URL, wait: TimeInterval = 6) {
+        guard keyAdoption != .working else { return }
+        keyAdoption = .working
+        Task {
+            let picked = await ICloudFolderMigration.inspectPicked(url, wait: wait)
+            if let message = KeyAdoptionState.pickedFolderMessage(picked) {
+                // names the folder just picked, not the one still configured
+                self.keyAdoption = .notFound(message, searched: ICloudFolderMigration.displayName(for: url)); return
+            }
+            do { try CloudSyncManager.shared.setFolder(url, chosen: true) } catch {
+                self.keyAdoption = .failed(describe(error)); return
+            }
+            self.keyAdoption = .idle
+            self.adoptSyncKey(text)
         }
     }
 
