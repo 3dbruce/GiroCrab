@@ -554,11 +554,11 @@ public final class AppModel {
     var iconColorTarget: IconColorTarget?
     /// The "new category" name prompt on screen (sidebar, menu bar, ⌘K).
     var newCategoryRequest: NewCategoryRequest?
-    /// "Belege & PostBox" filtered to one account (#172); nil = all accounts,
-    /// `documentsWithoutAccount` = documents without an account (e.g. PostBox, #838).
+    /// "Belege & Postbox" filtered to one account (#172); nil = all accounts,
+    /// `documentsWithoutAccount` = documents without an account (e.g. Postbox, #838).
     var documentsScope: DocumentsScope = .all
     var documentsAccountFilter: Int64?
-    /// "Belege & PostBox" filtered to one bank connection (#1042); nil = all, `documentsWithoutAccount` =
+    /// "Belege & Postbox" filtered to one bank connection (#1042); nil = all, `documentsWithoutAccount` =
     /// documents without an account (they have no bank connection). Set it with `selectDocumentsConnection`.
     var documentsConnectionFilter: Int64?
     static let documentsWithoutAccount: Int64 = -1
@@ -574,7 +574,7 @@ public final class AppModel {
     /// Sidebar badges: scheduled payments / active mandates over all accounts (SQL counts).
     var plannedCount = 0
     var mandateCount = 0
-    /// Unread documents (badge of „Belege & PostBox“), a partial-index COUNT.
+    /// Unread documents (badge of „Belege & Postbox“), a partial-index COUNT.
     var unseenDocumentCount = 0
     /// Counts the sidebar badge reads: an older read that finishes late must not overwrite a newer one.
     @ObservationIgnored var sidebarCountsGeneration = 0
@@ -874,7 +874,7 @@ public final class AppModel {
     /// Account whose statements (HKEKA) are being fetched by the running session.
     var statementsAccountID: Int64?
     var statementsCountBefore = 0
-    /// comdirect FinTS login whose PostBox is fetched now ("PostBox jetzt abrufen", #838).
+    /// comdirect FinTS login whose Postbox is fetched now ("Postbox jetzt abrufen", #838).
     var postboxConnectionID: Int64?
     /// Account whose login syncs only it ("<Konto> abrufen", #1124). Set by
     /// `requestSyncAccount`, kept through prompts and retries, cleared by a
