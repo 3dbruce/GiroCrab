@@ -35,7 +35,8 @@ and test results in audits. Use issues for plans and open questions.
 3. The maintainers decide whether to accept or reject the proposal. Update the
    status and date in the ADR and the status in the index as part of that review.
 4. To replace an accepted decision, submit a new ADR. Once accepted, mark the
-   previous ADR **Superseded** and link to its successor.
+   previous ADR **Superseded** and link to its successor. Update its index entry
+   to **Superseded by NNNN**.
 
 | Status | Meaning |
 | --- | --- |
