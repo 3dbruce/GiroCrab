@@ -426,15 +426,17 @@ pub(crate) fn store_fetch(
                     // first stored as checking (e.g. C24 PocketZINS, typed by product).
                     // Loan: a Schwäbisch Hall Bausparvertrag moving on to its loan phase
                     // (same contract id), which must not stay a savings account.
+                    // A stored Festgeld stays one when the bank reports Savings (#1002).
                     if acc.kind == AccountKind::Brokerage
                         || acc.kind == AccountKind::Savings
+                        || acc.kind == AccountKind::TimeDeposit
                         || (acc.kind == AccountKind::Loan && kind == ConnectorKind::SchwaebischHall)
                     {
                         let (group, sym, order) = group_for(acc.kind);
                         let gid = Vault::ensure_group(&tx, group, sym, order)?;
                         let changed = tx.execute(
                             // a symbol the user picked (symbol_ms > 0) stays
-                            "UPDATE accounts SET kind = ?1, sf_symbol = CASE WHEN symbol_ms > 0 THEN sf_symbol ELSE ?2 END, group_id = ?3 WHERE id = ?4 AND kind <> ?1",
+                            "UPDATE accounts SET kind = ?1, sf_symbol = CASE WHEN symbol_ms > 0 THEN sf_symbol ELSE ?2 END, group_id = ?3 WHERE id = ?4 AND kind <> ?1 AND NOT (?1 = 'savings' AND kind = 'time_deposit')",
                             params![acc.kind.as_str(), acc.kind.sf_symbol(), gid, id],
                         )?;
                         if changed > 0 {
@@ -1085,6 +1087,7 @@ pub(crate) fn group_for(kind: AccountKind) -> (&'static str, &'static str, i32) 
     match kind {
         AccountKind::Checking
         | AccountKind::Savings
+        | AccountKind::TimeDeposit
         | AccountKind::Cash
         | AccountKind::PaymentService => ("Giro & Tagesgeld", "building.columns", 1),
         AccountKind::CreditCard => ("Kreditkarten", "creditcard", 2),
@@ -2547,7 +2550,8 @@ fn adopt_past_deleted_twin(
 
 /// Links an unconnected stored account to `connection_id` when it matches the
 /// remote one by account number / IBAN (ignoring spaces and leading zeros) or is
-/// the single unlinked depot of the same bank. Sets `connection_id`, `external_ref`, `kind`.
+/// the single unlinked depot of the same bank. Sets `connection_id`, `external_ref`, `kind`
+/// (a stored Festgeld stays one when the bank reports Savings, #1002).
 fn adopt_unlinked(
     tx: &rusqlite::Connection,
     connection_id: i64,
@@ -2605,7 +2609,11 @@ fn adopt_unlinked(
             return Ok(found);
         }
         tx.execute(
-            "UPDATE accounts SET connection_id = ?1, external_ref = ?2, kind = ?3 WHERE id = ?4",
+            // a stored Festgeld stays one when the bank reports Savings (#1002),
+            // like in the update of linked accounts in `store_fetch`
+            "UPDATE accounts SET connection_id = ?1, external_ref = ?2,
+                    kind = CASE WHEN ?3 = 'savings' AND kind = 'time_deposit' THEN kind ELSE ?3 END
+             WHERE id = ?4",
             params![connection_id, acc.external_ref, acc.kind.as_str(), id],
         )?;
     }

@@ -329,6 +329,7 @@ fn kind_name(kind: AccountKind) -> &'static str {
     match kind {
         AccountKind::Checking => "checking",
         AccountKind::Savings => "savings",
+        AccountKind::TimeDeposit => "time deposit",
         AccountKind::CreditCard => "credit card",
         AccountKind::Brokerage => "depot",
         AccountKind::Loan => "loan",

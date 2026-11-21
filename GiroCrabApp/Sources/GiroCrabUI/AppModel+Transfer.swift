@@ -34,6 +34,9 @@ extension AppModel {
     var savingsTransferSources: [Account] { sendableAccounts(of: .savings) }
 
     /// Accounts of `kind` with an IBAN that a connected, write-capable bank can send from.
+    ///
+    /// A fixed-term deposit (`.timeDeposit`, #1002) is never offered: its money is tied up,
+    /// so no transfer goes out of it.
     private func sendableAccounts(of kind: AccountKind) -> [Account] {
         let readOnly = Set(connections.filter { usesRah10($0) }.map(\.id))
         return allAccounts.filter {
