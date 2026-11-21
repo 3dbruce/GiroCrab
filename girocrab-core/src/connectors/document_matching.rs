@@ -380,8 +380,8 @@ fn accounts_named_in(text: &str, accounts: &[(i64, String, String)]) -> Option<V
             .iter()
             .filter(|(_, _, number)| {
                 let digits: String = number.chars().filter(char::is_ascii_digit).collect();
-                let digits = digits.trim_start_matches('0');
-                digits.len() >= 6 && numbers.contains(&digits)
+                let normalized = digits.trim_start_matches('0');
+                digits.len() >= 6 && !normalized.is_empty() && numbers.contains(&normalized)
             })
             .map(|(id, _, _)| *id)
             .collect(),
@@ -889,6 +889,26 @@ mod tests {
         );
         // part of a longer number is no hit
         assert!(accounts_named_in("Vorgang 91234567001", &accounts).is_none());
+    }
+
+    #[test]
+    fn settlement_account_numbers_can_have_leading_zeros() {
+        let accounts = [
+            (1, String::new(), "0000012345".to_owned()),
+            (2, String::new(), "0000000000".to_owned()),
+        ];
+        assert_eq!(
+            accounts_named_in("Verrechnungskonto Nr. 0000012345", &accounts),
+            Some(vec![1])
+        );
+        assert_eq!(
+            accounts_named_in("Verrechnungskonto Nr. 0000012346", &accounts),
+            Some(vec![])
+        );
+        assert_eq!(
+            accounts_named_in("Verrechnungskonto Nr. 0000000000", &accounts),
+            Some(vec![])
+        );
     }
 
     #[test]
