@@ -5,9 +5,98 @@
 use std::time::{Duration, Instant};
 
 use girocrab_core::connectors::PayeeCheck;
-use girocrab_core::{Challenge, ChallengeKind, TransferStep};
+use girocrab_core::{Account, AccountKind, Challenge, ChallengeKind, TransferStep};
 
+use crate::daily::TransferInput;
 use crate::sync_flow::{CANCELLED, Ui, safe_https_url};
+
+/// Shown while a savings account is the sender (wording of the Mac sheet).
+pub const SAVINGS_HINT: &str =
+    "Vom Tagesgeldkonto sind nur Umbuchungen auf das Referenzkonto möglich.";
+/// Shown when a savings account has no reference account; sending stays blocked.
+pub const SAVINGS_NO_REFERENCE: &str =
+    "Für dieses Tagesgeldkonto gibt es kein Referenzkonto (eigenes Girokonto mit IBAN).";
+
+/// The only recipient a transfer from a savings account may go to (#582).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recipient {
+    pub name: String,
+    pub iban: String,
+}
+
+/// What the transfer dialog allows as recipient for one sender.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum RecipientRule {
+    /// Current account etc.: free input.
+    #[default]
+    Free,
+    /// Savings account: fixed to its reference account, fields locked.
+    Fixed(Recipient),
+    /// Savings account without a reference account: nothing may be sent.
+    Unavailable,
+}
+
+fn is_savings(a: &Account) -> bool {
+    a.kind == AccountKind::Savings
+}
+
+fn usable_iban(a: &Account) -> Option<String> {
+    let iban: String = a.iban.split_whitespace().collect();
+    (!iban.is_empty()).then(|| iban.to_uppercase())
+}
+
+/// Reference account of a savings account, derived like the Mac's `internalTransferTargets(from:)`:
+/// an unarchived current account with an IBAN, same bank connection first. `None` for any other
+/// sender type or when no such account exists.
+pub fn savings_counterpart(account: &Account, accounts: &[Account]) -> Option<Recipient> {
+    if !is_savings(account) {
+        return None;
+    }
+    let giro = |a: &&Account| {
+        a.id != account.id
+            && a.kind == AccountKind::Checking
+            && a.archived_unix.is_none()
+            && usable_iban(a).is_some()
+    };
+    let same_bank =
+        |a: &&Account| account.connection_id.is_some() && a.connection_id == account.connection_id;
+    let target = accounts
+        .iter()
+        .filter(giro)
+        .find(same_bank)
+        .or_else(|| accounts.iter().find(giro))?;
+    // The account holder is what the bank's recipient check compares; fall back to the label.
+    let name = if target.owner.trim().is_empty() {
+        target.name.clone()
+    } else {
+        target.owner.trim().to_string()
+    };
+    Some(Recipient {
+        name,
+        iban: usable_iban(target)?,
+    })
+}
+
+pub fn recipient_rule(account: &Account, accounts: &[Account]) -> RecipientRule {
+    match savings_counterpart(account, accounts) {
+        Some(r) => RecipientRule::Fixed(r),
+        None if is_savings(account) => RecipientRule::Unavailable,
+        None => RecipientRule::Free,
+    }
+}
+
+/// Enforces the rule on the submitted form: the field text never wins over a fixed recipient.
+pub fn apply_recipient_rule(input: &mut TransferInput, rule: &RecipientRule) -> Result<(), String> {
+    match rule {
+        RecipientRule::Free => Ok(()),
+        RecipientRule::Fixed(r) => {
+            input.name = r.name.clone();
+            input.iban = r.iban.clone();
+            Ok(())
+        }
+        RecipientRule::Unavailable => Err(SAVINGS_NO_REFERENCE.into()),
+    }
+}
 
 const DIALOG_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
@@ -148,6 +237,85 @@ mod tests {
     use girocrab_core::connectors::{PayeeMatch, TransferOutcome};
     use std::cell::RefCell;
     use zeroize::Zeroizing;
+
+    fn acc(id: i64, kind: AccountKind, conn: Option<i64>, iban: &str) -> Account {
+        let mut a = crate::nav::testing::account(id, &format!("Konto {id}"), "Bank", kind, 0);
+        a.connection_id = conn;
+        a.iban = iban.to_string();
+        a
+    }
+
+    #[test]
+    fn savings_prefers_checking_of_same_connection() {
+        let savings = acc(1, AccountKind::Savings, Some(7), "DE01");
+        let all = vec![
+            savings.clone(),
+            acc(2, AccountKind::Checking, Some(9), "DE02 0000"),
+            acc(3, AccountKind::Checking, Some(7), "de03 0000"),
+        ];
+        let r = savings_counterpart(&savings, &all).unwrap();
+        assert_eq!(r.iban, "DE030000");
+        assert_eq!(r.name, "Konto 3");
+    }
+
+    #[test]
+    fn savings_uses_owner_as_recipient_name_when_set() {
+        let savings = acc(1, AccountKind::Savings, Some(7), "DE01");
+        let mut giro = acc(2, AccountKind::Checking, Some(7), "DE02");
+        giro.owner = " Erika Muster ".into();
+        let r = savings_counterpart(&savings, &[savings.clone(), giro]).unwrap();
+        assert_eq!(r.name, "Erika Muster");
+    }
+
+    #[test]
+    fn savings_falls_back_to_other_checking_and_skips_archived_or_without_iban() {
+        let savings = acc(1, AccountKind::Savings, Some(7), "DE01");
+        let mut archived = acc(2, AccountKind::Checking, Some(7), "DE02");
+        archived.archived_unix = Some(1);
+        let all = vec![
+            savings.clone(),
+            archived,
+            acc(3, AccountKind::Checking, Some(7), ""),
+            acc(4, AccountKind::Checking, Some(9), "DE04"),
+        ];
+        assert_eq!(savings_counterpart(&savings, &all).unwrap().iban, "DE04");
+    }
+
+    #[test]
+    fn savings_without_reference_blocks_sending() {
+        let savings = acc(1, AccountKind::Savings, Some(7), "DE01");
+        let all = vec![
+            savings.clone(),
+            acc(2, AccountKind::Savings, Some(7), "DE02"),
+        ];
+        assert_eq!(savings_counterpart(&savings, &all), None);
+        let rule = recipient_rule(&savings, &all);
+        assert_eq!(rule, RecipientRule::Unavailable);
+        let mut input = TransferInput::default();
+        assert_eq!(
+            apply_recipient_rule(&mut input, &rule),
+            Err(SAVINGS_NO_REFERENCE.to_string())
+        );
+    }
+
+    #[test]
+    fn checking_stays_free_and_fixed_rule_overrides_typed_fields() {
+        let giro = acc(1, AccountKind::Checking, Some(7), "DE01");
+        let savings = acc(2, AccountKind::Savings, Some(7), "DE02");
+        let all = vec![giro.clone(), savings.clone()];
+        assert_eq!(recipient_rule(&giro, &all), RecipientRule::Free);
+
+        let mut input = TransferInput {
+            name: "Fremd".into(),
+            iban: "DE99".into(),
+            ..Default::default()
+        };
+        apply_recipient_rule(&mut input, &recipient_rule(&savings, &all)).unwrap();
+        assert_eq!(
+            (input.name.as_str(), input.iban.as_str()),
+            ("Konto 1", "DE01")
+        );
+    }
 
     struct Fake {
         steps: RefCell<Vec<TransferStep>>,
