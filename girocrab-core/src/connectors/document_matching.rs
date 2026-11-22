@@ -96,11 +96,15 @@ pub(crate) const COMDIRECT: DocumentMatchRules = DocumentMatchRules {
     link_types: &["abrechnung"],
     direction_required: true,
     account_from_text: true,
+    // comdirect books a sale with withheld tax at the amount after tax; that amount stands only in
+    // the tax calculation ("Zu Ihren Gunsten nach Steuern"). Without withheld tax both are equal.
     amount_labels: &[
         &["ausmachender betrag"],
         &[
             "zu ihren lasten vor steuern",
             "zu ihren gunsten vor steuern",
+            "zu ihren lasten nach steuern",
+            "zu ihren gunsten nach steuern",
         ],
     ],
     slack_days: 5,
@@ -848,6 +852,57 @@ mod tests {
                 Some(false)
             ),
             BookingMatch::Unique(1)
+        );
+    }
+
+    #[test]
+    fn a_comdirect_sale_with_withheld_tax_is_matched_at_the_amount_after_tax() {
+        // invented values in the layout of a comdirect sale with a gain
+        let sale = "Wertpapierverkauf\nWPKNR/ISIN A0B1C2 / DE0001234567\nKurswert : EUR 5.010,00\n\
+                    Provision : EUR 10,00\n\
+                    Verrechnung \u{fc}ber Konto (IBAN) Valuta Zu Ihren Gunsten vor Steuern\n\
+                    DE00 0000 0000 0000 0000 00 EUR 03.06.2025 EUR 5.000,00\n\
+                    Steuerberechnung\nKapitalertragsteuer EUR 50,00-\nSolidarit\u{e4}tszuschlag EUR 2,75-\n\
+                    Zu Ihren Gunsten nach Steuern: EUR 4.947,25";
+        assert_eq!(
+            settled_amounts(sale, COMDIRECT.amount_labels),
+            [(5_000_00, "EUR".to_owned()), (4_947_25, "EUR".to_owned())]
+        );
+        let b = |id, date: &str, cents, cp: &str| (id, date.to_string(), cents, cp.to_string());
+        // the bank books the amount after tax and names the gross amount only in the purpose
+        let bookings = vec![b(
+            1,
+            "2025-06-04",
+            4_947_25,
+            "FONDS WPKNR: A0B1C2 ISIN: DE0001234567 Abr.Betrag Brutto 5.000,00 EUR Steuerabzug 52,75- EUR",
+        )];
+        let matched = |labels: &[&[&str]]| {
+            let amounts: Vec<i64> = settled_amounts(sale, labels)
+                .into_iter()
+                .map(|(cents, _)| cents)
+                .collect();
+            match_by_amounts(
+                &amounts,
+                &pdf_dates(sale),
+                "DE0001234567",
+                &bookings,
+                COMDIRECT.slack_days,
+                Some(true),
+            )
+        };
+        assert_eq!(matched(COMDIRECT.amount_labels), BookingMatch::Unique(1));
+        // the amount before tax alone finds no booking
+        assert_eq!(
+            matched(&[&["zu ihren gunsten vor steuern"]]),
+            BookingMatch::None
+        );
+        // a purchase states the same amount before and after tax
+        let purchase = "IBAN Valuta Zu Ihren Lasten vor Steuern\n\
+                        DE00 0000 0000 0000 0000 00 EUR 19.07.2023 EUR 24,94\n\
+                        Zu Ihren Lasten nach Steuern: EUR 24,94";
+        assert_eq!(
+            settled_amounts(purchase, COMDIRECT.amount_labels),
+            [(24_94, "EUR".to_owned()), (24_94, "EUR".to_owned())]
         );
     }
 
