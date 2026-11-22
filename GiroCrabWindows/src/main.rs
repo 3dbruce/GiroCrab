@@ -1226,11 +1226,17 @@ fn refresh_transfer_sources(win: &MainWindow, vault: &Vault) {
         .map(|s| SharedString::from(s.1.as_str()))
         .collect();
     win.set_transfer_accounts(ModelRc::new(VecModel::from(labels)));
+    let index = win.get_tr_account_index();
+    let before = transfer_rule_at(index);
     with_state(|st| {
         st.transfer_sources = sources;
         st.transfer_rules = rules;
     });
-    apply_transfer_rule(win, win.get_tr_account_index());
+    if transfer_rule_at(index) != before {
+        // A shown GiroCode may carry a recipient the new rule no longer allows.
+        win.set_girocode_open(false);
+    }
+    apply_transfer_rule(win, index);
 }
 
 /// Recipient rule of the sender at `index` of the transfer dialog (free when out of range).
@@ -1554,6 +1560,18 @@ fn transfer_fields(win: &MainWindow) -> girocode::Fields {
         amount: win.get_transfer_pre_amount().to_string(),
         purpose: win.get_transfer_pre_purpose().to_string(),
     }
+}
+
+/// Fields for a GiroCode export: the sender's recipient rule applied with the real (unmasked)
+/// values from `State`, like on submit. Refused for a savings account without reference account.
+fn girocode_fields(win: &MainWindow) -> Result<girocode::Fields, String> {
+    let mut f = transfer_fields(win);
+    transfer_flow::apply_recipient_fields(
+        &mut f.name,
+        &mut f.iban,
+        &transfer_rule_at(win.get_tr_account_index()),
+    )?;
+    Ok(f)
 }
 
 fn set_transfer_fields(win: &MainWindow, f: &girocode::Fields) {
@@ -2119,6 +2137,8 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = win.as_weak();
         win.on_transfer_account_changed(move |index| {
             if let Some(win) = weak.upgrade() {
+                // The sender's rule may change the recipient: a shown GiroCode would be stale.
+                win.set_girocode_open(false);
                 apply_transfer_rule(&win, index);
             }
         });
@@ -2149,7 +2169,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = win.as_weak();
         win.on_transfer_girocode(move || {
             let Some(win) = weak.upgrade() else { return };
-            match girocode::girocode_image(&transfer_fields(&win)) {
+            match girocode_fields(&win).and_then(|f| girocode::girocode_image(&f)) {
                 Ok(img) => {
                     win.set_girocode_image(img);
                     win.set_girocode_open(true);
@@ -2167,7 +2187,8 @@ fn main() -> Result<(), slint::PlatformError> {
         win.on_transfer_girocode_copy(move || {
             let Some(win) = weak.upgrade() else { return };
             // Status texts never contain the name, IBAN or amount.
-            let status = girocode::girocode_clipboard_images(&transfer_fields(&win))
+            let status = girocode_fields(&win)
+                .and_then(|f| girocode::girocode_clipboard_images(&f))
                 .and_then(|(png, dib)| copy_image_to_clipboard(&png, &dib))
                 .map(|()| "GiroCode als Bild in die Zwischenablage kopiert.".to_string())
                 .unwrap_or_else(|e| e);
@@ -2178,7 +2199,13 @@ fn main() -> Result<(), slint::PlatformError> {
         let weak = win.as_weak();
         win.on_transfer_girocode_save(move || {
             let Some(win) = weak.upgrade() else { return };
-            let f = transfer_fields(&win);
+            let f = match girocode_fields(&win) {
+                Ok(f) => f,
+                Err(e) => {
+                    win.set_transfer_status(e.into());
+                    return;
+                }
+            };
             let png = match girocode::girocode_payload_for(&f)
                 .and_then(|p| girocode::girocode_png_bytes(&p, girocode::EXPORT_MODULE_PX))
             {

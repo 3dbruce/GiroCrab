@@ -85,17 +85,27 @@ pub fn recipient_rule(account: &Account, accounts: &[Account]) -> RecipientRule 
     }
 }
 
-/// Enforces the rule on the submitted form: the field text never wins over a fixed recipient.
-pub fn apply_recipient_rule(input: &mut TransferInput, rule: &RecipientRule) -> Result<(), String> {
+/// Enforces the rule on a recipient name and IBAN (transfer form and GiroCode export): the typed
+/// text stays for a free sender, a fixed recipient replaces it, an unavailable one is refused.
+pub fn apply_recipient_fields(
+    name: &mut String,
+    iban: &mut String,
+    rule: &RecipientRule,
+) -> Result<(), String> {
     match rule {
         RecipientRule::Free => Ok(()),
         RecipientRule::Fixed(r) => {
-            input.name = r.name.clone();
-            input.iban = r.iban.clone();
+            *name = r.name.clone();
+            *iban = r.iban.clone();
             Ok(())
         }
         RecipientRule::Unavailable => Err(SAVINGS_NO_REFERENCE.into()),
     }
+}
+
+/// Enforces the rule on the submitted form: the field text never wins over a fixed recipient.
+pub fn apply_recipient_rule(input: &mut TransferInput, rule: &RecipientRule) -> Result<(), String> {
+    apply_recipient_fields(&mut input.name, &mut input.iban, rule)
 }
 
 const DIALOG_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -315,6 +325,34 @@ mod tests {
             (input.name.as_str(), input.iban.as_str()),
             ("Konto 1", "DE01")
         );
+    }
+
+    #[test]
+    fn recipient_fields_follow_the_rule_for_girocode_export() {
+        let giro = acc(1, AccountKind::Checking, Some(7), "DE01");
+        let savings = acc(2, AccountKind::Savings, Some(7), "DE02");
+        let all = vec![giro.clone(), savings.clone()];
+
+        // Free: the typed recipient stays.
+        let (mut name, mut iban) = (String::from("Fremd"), String::from("DE99"));
+        apply_recipient_fields(&mut name, &mut iban, &RecipientRule::Free).unwrap();
+        assert_eq!((name.as_str(), iban.as_str()), ("Fremd", "DE99"));
+
+        // Fixed: the reference account replaces typed and empty fields alike.
+        let fixed = recipient_rule(&savings, &all);
+        apply_recipient_fields(&mut name, &mut iban, &fixed).unwrap();
+        assert_eq!((name.as_str(), iban.as_str()), ("Konto 1", "DE01"));
+        let (mut name, mut iban) = (String::new(), String::new());
+        apply_recipient_fields(&mut name, &mut iban, &fixed).unwrap();
+        assert_eq!((name.as_str(), iban.as_str()), ("Konto 1", "DE01"));
+
+        // Unavailable: no export, and the fields are left alone.
+        let (mut name, mut iban) = (String::from("Fremd"), String::from("DE99"));
+        assert_eq!(
+            apply_recipient_fields(&mut name, &mut iban, &RecipientRule::Unavailable),
+            Err(SAVINGS_NO_REFERENCE.to_string())
+        );
+        assert_eq!((name.as_str(), iban.as_str()), ("Fremd", "DE99"));
     }
 
     struct Fake {
