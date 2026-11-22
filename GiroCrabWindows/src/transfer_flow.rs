@@ -16,6 +16,8 @@ pub const SAVINGS_HINT: &str =
 /// Shown when a savings account has no reference account; sending stays blocked.
 pub const SAVINGS_NO_REFERENCE: &str =
     "Für dieses Tagesgeldkonto gibt es kein Referenzkonto (eigenes Girokonto mit IBAN).";
+/// Longest recipient name a SEPA transfer accepts (same limit as `daily::validate_transfer`).
+const RECIPIENT_NAME_MAX: usize = 70;
 
 /// The only recipient a transfer from a savings account may go to (#582).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,13 +68,14 @@ pub fn savings_counterpart(account: &Account, accounts: &[Account]) -> Option<Re
         .find(same_bank)
         .or_else(|| accounts.iter().find(giro))?;
     // The account holder is what the bank's recipient check compares; fall back to the label.
-    let name = if target.owner.trim().is_empty() {
-        target.name.clone()
-    } else {
-        target.owner.trim().to_string()
+    // A label may be longer than a SEPA name allows: the locked field must still pass the form check.
+    let source = match target.owner.trim() {
+        "" => target.name.trim(),
+        owner => owner,
     };
+    let name: String = source.chars().take(RECIPIENT_NAME_MAX).collect();
     Some(Recipient {
-        name,
+        name: name.trim_end().to_string(),
         iban: usable_iban(target)?,
     })
 }
@@ -275,6 +278,34 @@ mod tests {
         giro.owner = " Erika Muster ".into();
         let r = savings_counterpart(&savings, &[savings.clone(), giro]).unwrap();
         assert_eq!(r.name, "Erika Muster");
+    }
+
+    #[test]
+    fn fixed_recipient_name_stays_within_the_transfer_limit() {
+        let savings = acc(1, AccountKind::Savings, Some(7), "DE01");
+
+        // Empty owner, label of exactly 70 characters: kept as is.
+        let mut giro = acc(2, AccountKind::Checking, Some(7), "DE02");
+        giro.owner = "  ".into();
+        giro.name = "ä".repeat(70);
+        let r = savings_counterpart(&savings, &[savings.clone(), giro.clone()]).unwrap();
+        assert_eq!(r.name, "ä".repeat(70));
+
+        // Empty owner, label of 71 characters: shortened to 70 characters (not bytes).
+        giro.name = "ä".repeat(71);
+        let r = savings_counterpart(&savings, &[savings.clone(), giro.clone()]).unwrap();
+        assert_eq!(r.name.chars().count(), 70);
+        assert_eq!(r.name, "ä".repeat(70));
+
+        // A cut right after a space leaves no trailing blank.
+        giro.name = format!("{} Rest", "a".repeat(69));
+        let r = savings_counterpart(&savings, &[savings.clone(), giro.clone()]).unwrap();
+        assert_eq!(r.name, "a".repeat(69));
+
+        // A long owner is shortened as well.
+        giro.owner = "b".repeat(80);
+        let r = savings_counterpart(&savings, &[savings.clone(), giro]).unwrap();
+        assert_eq!(r.name, "b".repeat(70));
     }
 
     #[test]

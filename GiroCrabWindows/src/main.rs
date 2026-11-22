@@ -1226,17 +1226,28 @@ fn refresh_transfer_sources(win: &MainWindow, vault: &Vault) {
         .map(|s| SharedString::from(s.1.as_str()))
         .collect();
     win.set_transfer_accounts(ModelRc::new(VecModel::from(labels)));
-    let index = win.get_tr_account_index();
-    let before = transfer_rule_at(index);
+    // The rule shown so far: old index under the old rules.
+    let before = transfer_rule_at(win.get_tr_account_index());
     with_state(|st| {
         st.transfer_sources = sources;
         st.transfer_rules = rules;
     });
+    // A shorter list must not leave the index pointing past the sender the ComboBox shows.
+    let index = normalize_transfer_index(win);
     if transfer_rule_at(index) != before {
         // A shown GiroCode may carry a recipient the new rule no longer allows.
         win.set_girocode_open(false);
     }
     apply_transfer_rule(win, index);
+}
+
+/// Clamps the saved sender index to the current sender list (the range the ComboBox uses) and
+/// stores it back, so the applied recipient rule always belongs to the sender shown.
+fn normalize_transfer_index(win: &MainWindow) -> i32 {
+    let last = (with_state(|st| st.transfer_sources.len()) as i32 - 1).max(0);
+    let index = win.get_tr_account_index().clamp(0, last);
+    win.set_tr_account_index(index);
+    index
 }
 
 /// Recipient rule of the sender at `index` of the transfer dialog (free when out of range).
@@ -1588,7 +1599,8 @@ fn apply_transfer_prefill(win: &MainWindow, p: &TransferPrefill) {
     win.set_transfer_pre_purpose(p.purpose.clone().into());
     win.set_transfer_status(SharedString::new());
     win.set_girocode_open(false);
-    apply_transfer_rule(win, win.get_tr_account_index());
+    let index = normalize_transfer_index(win);
+    apply_transfer_rule(win, index);
     win.set_transfer_open(true);
 }
 
